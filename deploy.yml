@@ -1,0 +1,200 @@
+---
+- name: Deploy Laravel project
+  hosts: laravel-vps
+  become: true
+  handlers:
+    - name: Restart Apache
+      service:
+        name: apache2
+        state: restarted
+  tasks:
+
+    - name: install git package
+      apt:
+        name: git
+
+    - name: Check if Laravel project directory exists
+      stat:
+        path: /var/www/masterinfotech
+      register: project_directory
+
+    - name: Clone Laravel project from Git repository
+      git:
+        repo: http://{{ githubuser | urlencode }}:{{ githubpassword | urlencode }}@191.101.3.45:3000/shadygill/MasterInfotech_2023.git
+        dest: /var/www/masterinfotech
+        version: staging
+        force: yes
+        depth: 1
+        accept_hostkey: yes
+        key_file: /home/jd/.ssh/id_rsa
+      register: clone_result
+      when:
+        - project_directory.stat.exists == false
+        - project_directory.stat.isdir == false
+        
+
+
+    # - name: Check if Git repository is cloned
+    #   fail:
+    #     msg: "Failed to clone Git repository"
+    #   when:
+    #     - clone_result.failed
+    #     - project_directory.stat.exists == false
+
+    - name: Update package cache
+      apt:
+        update_cache: yes
+
+    # Install required packages for PHP and MySQL
+    - name: Install PHP and MySQL packages
+      apt:
+        name:
+          - php7.4
+          - php7.4-cli
+          - php7.4-common
+          - php7.4-mysql
+          - php7.4-gd
+          - php7.4-curl
+          - php7.4-xml
+          - mysql-server
+          - mysql-client
+        state: present
+      become: true
+
+    # Set MySQL root password
+    - name: Set MySQL root password
+      debconf:
+        name: 'mysql-server'
+        question: 'mysql-server/root_password'
+        value: ''
+        vtype: password
+      become: true
+
+    - name: Reconfigure MySQL server
+      command: dpkg-reconfigure -f noninteractive mysql-server
+      become: true      
+
+
+    - name: Install composer
+      apt:
+        name: composer
+        state: latest
+
+    # Include the PHP version update tasks here
+    # - name: Install required packages for PHP version upgrade
+    #   apt:
+    #     name: ['software-properties-common', 'python-software-properties']
+    #     state: present
+    #   become: yes
+
+    # - name: Add ondrej/php repository
+    #   apt_repository:
+    #     repo: ppa:ondrej/php
+    #     state: present
+    #   become: yes
+
+    # - name: Update apt cache
+    #   apt:
+    #     update_cache: yes
+    #   become: yes
+
+    # - name: Upgrade PHP packages
+    #   apt:
+    #     name: php7.4
+    #     state: latest
+    #   become: yes
+
+    # - name: Install PHP extensions
+    #   apt:
+    #     name: ['php7.4-cli', 'php7.4-common', 'php7.4-mysql', 'php7.4-gd', 'php7.4-curl', 'php7.4-xml']
+    #     state: present
+    #   become: yes
+    - name: Install Composer
+      apt:
+        name: composer
+        state: latest
+
+    - name: Check if Laravel project directory exists
+      stat:
+        path: /var/www/masterinfotech
+      register: project_directory
+
+
+    - name: Install dependencies with Composer
+      command: composer install --no-dev --optimize-autoloader
+      args:
+        chdir: /var/www/masterinfotech
+      when: project_directory.stat.exists == true
+
+    - name: Set permissions for Laravel storage directory
+      command: chmod -R 775 /var/www/masterinfotech/storage
+      when: project_directory.stat.exists == true
+
+    - name: Set ownership for Laravel directories
+      command: chown -R www-data:www-data /var/www/masterinfotech/storage /var/www/masterinfotech/bootstrap/cache
+      when: project_directory.stat.exists == true
+
+    - name: Set Laravel application key
+      command: php artisan key:generate --force
+      args:
+        chdir: /var/www/masterinfotech
+      when: project_directory.stat.exists == true
+
+    - name: Configure Laravel .env file
+      template:
+        src: .env.j2
+        dest: /var/www/masterinfotech/.env
+        owner: www-data
+        group: www-data
+        mode: "0644"
+      when: project_directory.stat.exists == true
+
+    - name: Clear Laravel cache
+      command: php artisan cache:clear
+      args:
+        chdir: /var/www/masterinfotech
+      when: project_directory.stat.exists == true
+
+    # - name: Migrate database
+    #   command: php artisan migrate
+    #   args:
+    #     chdir: /var/www/masterinfotech
+    #   when: project_directory.stat.exists == true
+
+    - name: Optimize Laravel
+      command: php artisan optimize
+      args:
+        chdir: /var/www/masterinfotech
+      when: project_directory.stat.exists == true
+
+    - name: Install Apache web server
+      apt:
+        name: apache2
+        state: latest
+
+    - name: Enable Apache mod_rewrite
+      apache2_module:
+        name: rewrite
+        state: present
+
+    - name: Configure Apache virtual host
+      template:
+        src: apache-vhost.conf.j2
+        dest: /etc/apache2/sites-available/laravel.conf
+      notify:
+        - Restart Apache
+
+    - name: Disable default Apache virtual host
+      command: a2dissite 000-default
+      notify:
+        - Restart Apache
+
+    - name: Enable Laravel Apache virtual host
+      command: a2ensite laravel
+      notify:
+        - Restart Apache
+
+    - name: Restart Apache
+      service:
+        name: apache2
+        state: restarted
